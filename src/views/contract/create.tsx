@@ -3,6 +3,7 @@ import ContainerBase from "@/component/common/block/container/ContainerBase";
 import BreadcrumbBase from "@/component/common/breadcrumb/Breadcrumb";
 import ButtonBase from "@/component/common/button/ButtonBase";
 import SelectboxBase from "@/component/common/input/SelectboxBase";
+import CheckBoxBase from "@/component/common/input/CheckboxBase";
 import { HomeOutlined } from "@ant-design/icons";
 import ModalAddMotor from "./modal/ModalAddMotor";
 import ModalSaveSurcharge from "./modal/ModalSaveSurcharge";
@@ -16,29 +17,6 @@ import { getAllActiveSurchargeTypes } from "@/service/business/surchargeTypeMng/
 import { getAllCustomers } from "@/service/business/customerMng/customerMng.service";
 import { ContractSaveDTO } from "@/service/business/contractMng/contractMng.type";
 
-// Dummy data
-const customers = [
-  { value: "1", label: "Nguyễn Văn A" },
-  { value: "2", label: "Trần Thị B" },
-  { value: "3", label: "Lê Văn C" },
-];
-const cars = [
-  { value: "1", label: "Honda Wave Alpha" },
-  { value: "2", label: "Yamaha Sirius" },
-  { value: "3", label: "Vinfast Fadil" },
-];
-const branches = [
-  { value: "CN1", label: "Chi nhánh 1" },
-  { value: "CN2", label: "Chi nhánh 2" },
-  { value: "CN3", label: "Chi nhánh 3" },
-];
-
-const paymentMethods = [
-  { value: "cash", label: "Tiền mặt" },
-  { value: "bank", label: "Chuyển khoản ngân hàng" },
-];
-
-// Dynamic page title and breadcrumb
 const getPageTitle = (isEdit: boolean) =>
   isEdit ? "Cập nhật hợp đồng thuê xe" : "Tạo hợp đồng thuê xe";
 const getBreadcrumbItems = (isEdit: boolean) => [
@@ -84,6 +62,59 @@ interface FeeItem {
 }
 
 const initialFeeList: FeeItem[] = [];
+
+function calcRentalInfo(
+  start: string,
+  end: string,
+  dailyPrice: number,
+  hourlyPrice: number
+) {
+  if (!start || !end || (!dailyPrice && !hourlyPrice))
+    return { days: 0, extraHours: 0, total: 0, durationText: "" };
+  const ms = new Date(end).getTime() - new Date(start).getTime();
+  if (ms <= 0) return { days: 0, extraHours: 0, total: 0, durationText: "" };
+  let totalHours = Math.ceil(ms / (1000 * 60 * 60));
+  let days = 0;
+  let extraHours = 0;
+  let total = 0;
+  let durationText = "";
+
+  if (dailyPrice) {
+    days = Math.floor(totalHours / 24);
+    extraHours = totalHours % 24;
+    // Nếu chỉ thuê vài tiếng trong ngày đầu tiên, vẫn tính là 1 ngày
+    if (days === 0) {
+      days = 1;
+      extraHours = 0;
+    } else {
+      // Nếu giờ phát sinh > 8h thì làm tròn thành 1 ngày
+      if (extraHours > 8) {
+        days += 1;
+        extraHours = 0;
+      }
+    }
+    // Nếu trả xe trễ dưới 30 phút thì không tính thêm giờ phát sinh
+    const msMod = ms % (1000 * 60 * 60);
+    if (days > 0 && msMod <= 1000 * 60 * 30 && extraHours > 0) {
+      extraHours -= 1;
+      if (extraHours < 0) extraHours = 0;
+    }
+    total = dailyPrice * days + (hourlyPrice || 0) * extraHours;
+    if (days > 0 && extraHours > 0) {
+      durationText = `${days} ngày ${extraHours} giờ`;
+    } else if (days > 0) {
+      durationText = `${days} ngày`;
+    } else {
+      durationText = `${extraHours} giờ`;
+    }
+  } else if (hourlyPrice) {
+    // Nếu chỉ có giá giờ
+    total = hourlyPrice * totalHours;
+    durationText = `${totalHours} giờ`;
+  }
+
+  return { days, extraHours, total, durationText };
+}
 
 const ContractCreateComponent = () => {
   const [form, setForm] = useState(initialForm);
@@ -159,8 +190,8 @@ const ContractCreateComponent = () => {
           source: c.source || "",
           branchRent: c.pickupBranchId || "",
           branchReturn: c.returnBranchId || "",
-          startDate: c.startDate || "",
-          endDate: c.endDate || "",
+          startDate: c.startDate ? c.startDate.slice(0, 16) : "", // ISO string to yyyy-MM-ddTHH:mm
+          endDate: c.endDate ? c.endDate.slice(0, 16) : "",
           needDelivery: !!c.needPickupDelivery,
           needReceive: !!c.needReturnDelivery,
           deliveryAddress: c.pickupAddress || "",
@@ -255,8 +286,26 @@ const ContractCreateComponent = () => {
     setFeeList(feeList.filter((_, i) => i !== idx));
   };
 
-  // Tính tổng tiền thuê xe
-  const totalCar = carList.reduce((sum, c) => sum + (c.total || 0), 0);
+  const rentalStart = form.startDate;
+  const rentalEnd = form.endDate;
+  const carRentalList = carList.map((c) => {
+    const { days, extraHours, total, durationText } = calcRentalInfo(
+      rentalStart,
+      rentalEnd,
+      c.priceDay || 0,
+      c.priceHour || 0
+    );
+    return {
+      ...c,
+      rentalDays: days,
+      rentalExtraHours: extraHours,
+      rentalDurationText: durationText,
+      rentalTotal: total,
+    };
+  });
+
+  // Tổng tiền thuê xe theo công thức mới
+  const totalCar = carRentalList.reduce((sum, c) => sum + (c.rentalTotal || 0), 0);
   // Tính tổng phụ phí
   const totalFee = feeList.reduce((sum, f) => sum + (f.amount || 0), 0);
   // Tính giảm giá
@@ -264,7 +313,8 @@ const ContractCreateComponent = () => {
   if (form.discountType === "AMOUNT") {
     discountAmount = Number(form.discountValue) || 0;
   } else if (form.discountType === "PERCENTAGE") {
-    discountAmount = ((Number(form.discountValue) || 0) / 100) * (totalCar + totalFee);
+    discountAmount =
+      ((Number(form.discountValue) || 0) / 100) * (totalCar + totalFee);
   }
   // Tổng cộng
   const totalAll = totalCar + totalFee - discountAmount;
@@ -309,6 +359,7 @@ const ContractCreateComponent = () => {
         hourlyPrice: car.priceHour,
         totalAmount: car.total,
         notes: "",
+        startOdometer: car.startOdometer ?? null, // Thêm dòng này
       })),
       surcharges: feeList.map((fee) => ({
         description: fee.desc,
@@ -320,7 +371,7 @@ const ContractCreateComponent = () => {
         unitPrice: fee.unitPrice || fee.amount || 0,
       })),
       depositAmount: payment.deposit,
-      status: "DRAFT",
+      status: "CONFIRMED",
     };
     try {
       await saveContract(contractPayload);
@@ -447,55 +498,76 @@ const ContractCreateComponent = () => {
                   style={{ width: "100%", minWidth: 160 }}
                 />
               </div>
-              <div style={{ display: "flex", alignItems: "center" }}>
-                <label
+              <div style={{ gridColumn: "span 2", marginBottom: 0 }}>
+                <div
                   style={{
-                    margin: 0,
-                    fontWeight: 400,
-                    cursor: "pointer",
-                    userSelect: "none",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 0,
+                    width: "100%",
                   }}
-                  htmlFor="needDelivery"
                 >
-                  Cần vận chuyển giao xe tận nơi
-                  <input
-                    type="checkbox"
-                    checked={form.needDelivery}
-                    onChange={(e) =>
-                      setForm({ ...form, needDelivery: e.target.checked })
-                    }
-                    style={{ margin: 0 }}
-                    id="needDelivery"
-                  />
-                </label>
-              </div>
-              <div style={{ display: "flex", alignItems: "center" }}>
-                <label
-                  style={{
-                    margin: 0,
-                    fontWeight: 400,
-                    cursor: "pointer",
-                    userSelect: "none",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                  }}
-                  htmlFor="needReceive"
-                >
-                  Cần vận chuyển nhận xe tận nơi
-                  <input
-                    type="checkbox"
-                    checked={form.needReceive}
-                    onChange={(e) =>
-                      setForm({ ...form, needReceive: e.target.checked })
-                    }
-                    style={{ margin: 0 }}
-                    id="needReceive"
-                  />
-                </label>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      justifyContent: "flex-start",
+                    }}
+                  >
+                    <CheckBoxBase
+                      id="needDelivery"
+                      checked={form.needDelivery}
+                      onChange={(checked: boolean) =>
+                        setForm((prev) => ({ ...prev, needDelivery: checked }))
+                      }
+                    />
+                    <label
+                      htmlFor="needDelivery"
+                      style={{
+                        margin: 0,
+                        fontWeight: 400,
+                        cursor: "pointer",
+                        userSelect: "none",
+                        fontSize: 15,
+                        minWidth: 180,
+                        textAlign: "left",
+                      }}
+                    >
+                      Cần vận chuyển giao xe tận nơi
+                    </label>
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      justifyContent: "flex-start",
+                    }}
+                  >
+                    <CheckBoxBase
+                      id="needReceive"
+                      checked={form.needReceive}
+                      onChange={(checked: boolean) =>
+                        setForm((prev) => ({ ...prev, needReceive: checked }))
+                      }
+                    />
+                    <label
+                      htmlFor="needReceive"
+                      style={{
+                        margin: 0,
+                        fontWeight: 400,
+                        cursor: "pointer",
+                        userSelect: "none",
+                        fontSize: 15,
+                        minWidth: 180,
+                        textAlign: "left",
+                      }}
+                    >
+                      Cần vận chuyển nhận xe tận nơi
+                    </label>
+                  </div>
+                </div>
               </div>
               <div>
                 <label className="form_label">Địa điểm giao xe</label>
@@ -554,6 +626,21 @@ const ContractCreateComponent = () => {
         <ContainerBase>
           <div className="box_section">
             <p className="box_title_sm">Danh sách xe thuê</p>
+            {/* Thời gian tính thuê giống detail */}
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                alignItems: "center",
+                marginBottom: 8,
+                width: "100%",
+              }}
+            >
+              <span style={{ color: "#1677ff", fontWeight: 500, fontSize: 15 }}>
+                Thời gian tính thuê:{" "}
+                {carRentalList[0]?.rentalDurationText || ""}
+              </span>
+            </div>
             <table
               className="contract-table contract-table-edit"
               style={{
@@ -578,7 +665,7 @@ const ContractCreateComponent = () => {
                 </tr>
               </thead>
               <tbody>
-                {carList.map((car, idx) => (
+                {carRentalList.map((car, idx) => (
                   <tr key={idx} style={{ borderBottom: "1px solid #eee" }}>
                     <td style={{ textAlign: "center" }}>{idx + 1}</td>
                     <td>{car.type}</td>
@@ -591,9 +678,6 @@ const ContractCreateComponent = () => {
                         onChange={(e) => {
                           const newCarList = [...carList];
                           newCarList[idx].priceDay = Number(e.target.value);
-                          newCarList[idx].total =
-                            (Number(e.target.value) || 0) +
-                            (newCarList[idx].priceHour || 0);
                           setCarList(newCarList);
                         }}
                         className="input-edit"
@@ -613,9 +697,6 @@ const ContractCreateComponent = () => {
                         onChange={(e) => {
                           const newCarList = [...carList];
                           newCarList[idx].priceHour = Number(e.target.value);
-                          newCarList[idx].total =
-                            (newCarList[idx].priceDay || 0) +
-                            (Number(e.target.value) || 0);
                           setCarList(newCarList);
                         }}
                         className="input-edit"
@@ -635,7 +716,7 @@ const ContractCreateComponent = () => {
                         textAlign: "right",
                       }}
                     >
-                      {car.total?.toLocaleString()}
+                      {car.rentalTotal?.toLocaleString()}
                     </td>
                     <td style={{ textAlign: "center" }}>
                       <ButtonBase
@@ -866,7 +947,8 @@ const ContractCreateComponent = () => {
                   onChange={(val: string | string[]) =>
                     setForm({
                       ...form,
-                      discountType: typeof val === "string" ? val : val[0] || "",
+                      discountType:
+                        typeof val === "string" ? val : val[0] || "",
                       discountValue: 0,
                     })
                   }
@@ -876,14 +958,21 @@ const ContractCreateComponent = () => {
               {form.discountType && (
                 <div style={{ minWidth: 140 }}>
                   <label className="form_label">
-                    {form.discountType === "AMOUNT" ? "Giá trị giảm giá" : "Phần trăm giảm giá"}
+                    {form.discountType === "AMOUNT"
+                      ? "Giá trị giảm giá"
+                      : "Phần trăm giảm giá"}
                   </label>
                   <input
                     type="number"
-                    placeholder={form.discountType === "AMOUNT" ? "Giá trị" : "%"}
+                    placeholder={
+                      form.discountType === "AMOUNT" ? "Giá trị" : "%"
+                    }
                     value={form.discountValue}
                     onChange={(e) =>
-                      setForm({ ...form, discountValue: Number(e.target.value) })
+                      setForm({
+                        ...form,
+                        discountValue: Number(e.target.value),
+                      })
                     }
                     style={{
                       width: "100%",
@@ -930,7 +1019,9 @@ const ContractCreateComponent = () => {
                   <tr>
                     <td>Giảm giá:</td>
                     <td style={{ textAlign: "right" }}>
-                      {discountAmount ? `- ${discountAmount.toLocaleString()} đ` : "0 đ"}
+                      {discountAmount
+                        ? `- ${discountAmount.toLocaleString()} đ`
+                        : "0 đ"}
                     </td>
                   </tr>
                   {/* Đặt cọc chỉ lưu thông tin, KHÔNG hiển thị ở bảng tổng kết */}
@@ -986,6 +1077,8 @@ const ContractCreateComponent = () => {
             ]);
             setShowAddMotor(false);
           }}
+          startDate={form.startDate}
+          endDate={form.endDate}
         />
 
         {/* Modal thêm phụ phí */}

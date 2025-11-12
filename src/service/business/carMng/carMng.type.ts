@@ -1,4 +1,4 @@
-export type CarStatus = "ACTIVE" | "INACTIVE" | "NOT_READY" | "LOST" | "BROKEN";
+export type CarStatus = "AVAILABLE" | "NOT_AVAILABLE" | "LOST" | "RENTED" | "MAINTENANCE";
 
 export interface CarSearchDTO {
   keyword?: string;
@@ -8,6 +8,8 @@ export interface CarSearchDTO {
   status?: CarStatus;
   page?: number;
   size?: number;
+  startDate?: string; // ISO string (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss)
+  endDate?: string;   // ISO string
 }
 
 export interface CarDTO {
