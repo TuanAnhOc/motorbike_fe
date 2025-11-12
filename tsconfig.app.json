@@ -1,5 +1,7 @@
 {
   "compilerOptions": {
+     "composite": true, 
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
     "target": "ESNext", // Specify ECMAScript target version
     "module": "ESNext", // Specify module code generation
     "jsx": "react-jsx", // Use the new JSX transform
